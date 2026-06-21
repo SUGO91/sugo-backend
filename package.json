@@ -1,6 +1,7 @@
 {
   "name": "sugo-backend",
   "version": "1.0.0",
+  "type": "module",
   "main": "api/postback.js",
   "scripts": {
     "start": "node api/postback.js"
