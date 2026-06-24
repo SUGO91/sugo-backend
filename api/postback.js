@@ -14,7 +14,7 @@ const db = admin.firestore();
 
 // SERVER
 const server = http.createServer(async (req, res) => {
-  // HOME PAGE TEST
+  // HOME PAGE
   if (req.url === "/") {
     res.writeHead(200, { "Content-Type": "application/json" });
 
@@ -37,12 +37,8 @@ const server = http.createServer(async (req, res) => {
     const transId = url.searchParams.get("trans_id");
 
     console.log("New CPX Event");
-    console.log("User:", userId);
-    console.log("Status:", status);
-    console.log("Amount:", amount);
-    console.log("Transaction:", transId);
 
-    // DUPLICATE PROTECTION
+    // DUPLICATE CHECK
     const transactionRef = db
       .collection("processedTransactions")
       .doc(transId);
@@ -57,7 +53,7 @@ const server = http.createServer(async (req, res) => {
       res.end(
         JSON.stringify({
           success: true,
-          message: "Duplicate transaction ignored",
+          message: "Duplicate ignored",
         })
       );
 
@@ -66,31 +62,72 @@ const server = http.createServer(async (req, res) => {
 
     // ONLY SUCCESSFUL SURVEY
     if (status === "1") {
-      // SAVE TRANSACTION FIRST
+      // SAVE TRANSACTION
       await transactionRef.set({
         transactionId: transId,
         createdAt: new Date(),
       });
 
-      // 60% company, 40% user
-      const userReward = amount * 0.4;
-      const companyProfit = amount * 0.6;
-      const coins = Math.floor(userReward * 10);
-
-      // UPDATE USER
+      // GET USER
       const userRef = db.collection("users").doc(userId);
       const userSnap = await userRef.get();
 
-      if (userSnap.exists) {
-        const userData = userSnap.data();
-
-        await userRef.update({
-          coins: (userData.coins || 0) + coins,
-          history: admin.firestore.FieldValue.arrayUnion(
-            `Survey Completed +${coins} Coins`
-          ),
-        });
+      if (!userSnap.exists) {
+        throw new Error("User not found");
       }
+
+      const userData = userSnap.data();
+
+      let companyProfit = 0;
+      let userReward = amount * 0.4;
+      let referrerReward = 0;
+
+      // CHECK REFERRAL
+      if (userData.referredBy && userData.referredBy !== "") {
+        companyProfit = amount * 0.5;
+        referrerReward = amount * 0.1;
+
+        // FIND REFERRER BY REFERRAL CODE
+        const referrerQuery = await db
+          .collection("users")
+          .where("referralCode", "==", userData.referredBy)
+          .get();
+
+        if (!referrerQuery.empty) {
+          const referrerDoc = referrerQuery.docs[0];
+          const referrerData = referrerDoc.data();
+
+          await referrerDoc.ref.update({
+            referralEarnings:
+              (referrerData.referralEarnings || 0) + referrerReward,
+
+            history: admin.firestore.FieldValue.arrayUnion(
+              `Referral Reward +₹${referrerReward}`
+            ),
+          });
+
+          console.log("Referrer rewarded ✅");
+        }
+      } else {
+        companyProfit = amount * 0.6;
+      }
+
+      // USER COINS
+      const coins = Math.floor(userReward * 10);
+
+      // UPDATE USER
+      await userRef.update({
+        coins: (userData.coins || 0) + coins,
+
+        totalEarningsRs: (userData.totalEarningsRs || 0) + userReward,
+
+        pendingRewardValueRs:
+          (userData.pendingRewardValueRs || 0) + userReward,
+
+        history: admin.firestore.FieldValue.arrayUnion(
+          `Survey Completed +${coins} Coins`
+        ),
+      });
 
       // UPDATE COMPANY WALLET
       const walletRef = db.collection("companyWallet").doc("main");
@@ -101,14 +138,17 @@ const server = http.createServer(async (req, res) => {
 
         await walletRef.update({
           totalEarnings: (walletData.totalEarnings || 0) + amount,
+
           netProfit: (walletData.netProfit || 0) + companyProfit,
+
           totalCoinsGiven: (walletData.totalCoinsGiven || 0) + coins,
+
           estimatedRewardLiability:
             (walletData.estimatedRewardLiability || 0) + userReward,
         });
       }
 
-      console.log("Reward added successfully ✅");
+      console.log("Survey processed successfully ✅");
     }
 
     res.writeHead(200, { "Content-Type": "application/json" });
