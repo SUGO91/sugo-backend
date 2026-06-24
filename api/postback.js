@@ -1,15 +1,13 @@
 import http from "http";
 import admin from "firebase-admin";
-import fs from "fs";
 
-// READ FIREBASE SECRET KEY
-const serviceAccount = JSON.parse(
-  fs.readFileSync("./serviceAccountKey.json", "utf8")
-);
-
-// FIREBASE INIT
+// FIREBASE INIT USING RENDER ENV VARIABLES
 admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
+  credential: admin.credential.cert({
+    projectId: process.env.PROJECT_ID,
+    clientEmail: process.env.CLIENT_EMAIL,
+    privateKey: process.env.PRIVATE_KEY.replace(/\\n/g, "\n"),
+  }),
 });
 
 const db = admin.firestore();
@@ -46,9 +44,9 @@ const server = http.createServer(async (req, res) => {
 
     // ONLY SUCCESSFUL SURVEY
     if (status === "1") {
-      // OUR BUSINESS MODEL
-      const userReward = amount * 0.4;      
-      const companyProfit = amount * 0.6;   
+      // 60% company, 40% user
+      const userReward = amount * 0.4;
+      const companyProfit = amount * 0.6;
       const coins = Math.floor(userReward * 10);
 
       // UPDATE USER
@@ -60,7 +58,6 @@ const server = http.createServer(async (req, res) => {
 
         await userRef.update({
           coins: (userData.coins || 0) + coins,
-
           history: admin.firestore.FieldValue.arrayUnion(
             `Survey Completed +${coins} Coins`
           ),
@@ -76,11 +73,8 @@ const server = http.createServer(async (req, res) => {
 
         await walletRef.update({
           totalEarnings: (walletData.totalEarnings || 0) + amount,
-
           netProfit: (walletData.netProfit || 0) + companyProfit,
-
           totalCoinsGiven: (walletData.totalCoinsGiven || 0) + coins,
-
           estimatedRewardLiability:
             (walletData.estimatedRewardLiability || 0) + userReward,
         });
