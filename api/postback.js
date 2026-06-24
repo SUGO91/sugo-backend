@@ -42,8 +42,36 @@ const server = http.createServer(async (req, res) => {
     console.log("Amount:", amount);
     console.log("Transaction:", transId);
 
+    // DUPLICATE PROTECTION
+    const transactionRef = db
+      .collection("processedTransactions")
+      .doc(transId);
+
+    const transactionSnap = await transactionRef.get();
+
+    if (transactionSnap.exists) {
+      console.log("Duplicate transaction blocked ❌");
+
+      res.writeHead(200, { "Content-Type": "application/json" });
+
+      res.end(
+        JSON.stringify({
+          success: true,
+          message: "Duplicate transaction ignored",
+        })
+      );
+
+      return;
+    }
+
     // ONLY SUCCESSFUL SURVEY
     if (status === "1") {
+      // SAVE TRANSACTION FIRST
+      await transactionRef.set({
+        transactionId: transId,
+        createdAt: new Date(),
+      });
+
       // 60% company, 40% user
       const userReward = amount * 0.4;
       const companyProfit = amount * 0.6;
