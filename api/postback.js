@@ -14,7 +14,6 @@ const db = admin.firestore();
 
 // SERVER
 const server = http.createServer(async (req, res) => {
-  // HOME PAGE
   if (req.url === "/") {
     res.writeHead(200, { "Content-Type": "application/json" });
 
@@ -60,15 +59,12 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // ONLY SUCCESSFUL SURVEY
     if (status === "1") {
-      // SAVE TRANSACTION
       await transactionRef.set({
         transactionId: transId,
         createdAt: new Date(),
       });
 
-      // GET USER
       const userRef = db.collection("users").doc(userId);
       const userSnap = await userRef.get();
 
@@ -78,41 +74,10 @@ const server = http.createServer(async (req, res) => {
 
       const userData = userSnap.data();
 
-      let companyProfit = 0;
+      let companyProfit = amount * 0.6;
       let userReward = amount * 0.4;
-      let referrerReward = 0;
 
-      // CHECK REFERRAL
-      if (userData.referredBy && userData.referredBy !== "") {
-        companyProfit = amount * 0.5;
-        referrerReward = amount * 0.1;
-
-        // FIND REFERRER BY REFERRAL CODE
-        const referrerQuery = await db
-          .collection("users")
-          .where("referralCode", "==", userData.referredBy)
-          .get();
-
-        if (!referrerQuery.empty) {
-          const referrerDoc = referrerQuery.docs[0];
-          const referrerData = referrerDoc.data();
-
-          await referrerDoc.ref.update({
-            referralEarnings:
-              (referrerData.referralEarnings || 0) + referrerReward,
-
-            history: admin.firestore.FieldValue.arrayUnion(
-              `Referral Reward +₹${referrerReward}`
-            ),
-          });
-
-          console.log("Referrer rewarded ✅");
-        }
-      } else {
-        companyProfit = amount * 0.6;
-      }
-
-      // USER COINS
+      // USER REWARD
       const coins = Math.floor(userReward * 10);
 
       // UPDATE USER
@@ -127,9 +92,48 @@ const server = http.createServer(async (req, res) => {
         history: admin.firestore.FieldValue.arrayUnion(
           `Survey Completed +${coins} Coins`
         ),
+
+        // TRACK SURVEY COUNT
+        referredSurveyCount: (userData.referredSurveyCount || 0) + 1,
       });
 
-      // UPDATE COMPANY WALLET
+      // REFERRAL LOCK SYSTEM
+      if (
+        userData.referredBy &&
+        userData.referredBy !== "" &&
+        (userData.referredSurveyCount || 0) + 1 >= 3 &&
+        (userData.referralRewardCount || 0) === 0
+      ) {
+        const referrerQuery = await db
+          .collection("users")
+          .where("referralCode", "==", userData.referredBy)
+          .get();
+
+        if (!referrerQuery.empty) {
+          const referrerDoc = referrerQuery.docs[0];
+          const referrerData = referrerDoc.data();
+
+          const referralReward = 20; // fixed reward ₹20
+
+          await referrerDoc.ref.update({
+            referralEarnings:
+              (referrerData.referralEarnings || 0) + referralReward,
+
+            history: admin.firestore.FieldValue.arrayUnion(
+              `Referral Reward +₹${referralReward}`
+            ),
+          });
+
+          // MARK USER AS ALREADY REWARDED
+          await userRef.update({
+            referralRewardCount: 1,
+          });
+
+          console.log("Referral reward unlocked ✅");
+        }
+      }
+
+      // UPDATE WALLET
       const walletRef = db.collection("companyWallet").doc("main");
       const walletSnap = await walletRef.get();
 
@@ -163,7 +167,6 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // 404
   res.writeHead(404, { "Content-Type": "application/json" });
 
   res.end(
@@ -173,7 +176,6 @@ const server = http.createServer(async (req, res) => {
   );
 });
 
-// START SERVER
 server.listen(10000, () => {
   console.log("Sugo backend running on port 10000 🚀");
 });
