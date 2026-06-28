@@ -1,5 +1,6 @@
 import http from "http";
 import admin from "firebase-admin";
+import axios from "axios";
 
 // FIREBASE INIT USING RENDER ENV VARIABLES
 admin.initializeApp({
@@ -178,4 +179,42 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(10000, () => {
   console.log("Sugo backend running on port 10000 🚀");
+});
+// VPN DETECTION ROUTE
+
+app.post("/check-vpn", async (req, res) => {
+  try {
+    const ip = req.body.ip;
+
+    const response = await axios.get(
+      `https://ipapi.co/${ip}/json/`
+    );
+
+    const data = response.data;
+
+    // basic suspicious detection
+    if (
+      data.org &&
+      (
+        data.org.toLowerCase().includes("vpn") ||
+        data.org.toLowerCase().includes("proxy") ||
+        data.org.toLowerCase().includes("hosting") ||
+        data.org.toLowerCase().includes("datacenter")
+      )
+    ) {
+      return res.json({
+        blocked: true,
+        reason: "VPN or Proxy Detected"
+      });
+    }
+
+    return res.json({
+      blocked: false
+    });
+
+  } catch (error) {
+    return res.json({
+      blocked: false
+    });
+  }
 });
