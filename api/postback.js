@@ -12,6 +12,20 @@ admin.initializeApp({
 
 const db = admin.firestore();
 
+// BLOCKED NETWORK WORDS
+const blockedNetworks = [
+  "vpn",
+  "proxy",
+  "hosting",
+  "datacenter",
+  "digitalocean",
+  "amazonaws",
+  "google",
+  "oracle",
+  "server",
+  "cloud"
+];
+
 // SERVER
 const server = http.createServer(async (req, res) => {
 
@@ -22,6 +36,36 @@ const server = http.createServer(async (req, res) => {
     res.end(
       JSON.stringify({
         message: "Sugo backend running 🚀",
+      })
+    );
+
+    return;
+  }
+
+  // SECURITY CHECK ROUTE
+  if (req.url.startsWith("/security-check")) {
+
+    const ip =
+      req.headers["x-forwarded-for"] ||
+      req.socket.remoteAddress ||
+      "";
+
+    const lowerIp = String(ip).toLowerCase();
+
+    let blocked = false;
+
+    for (let word of blockedNetworks) {
+      if (lowerIp.includes(word)) {
+        blocked = true;
+        break;
+      }
+    }
+
+    res.writeHead(200, { "Content-Type": "application/json" });
+
+    res.end(
+      JSON.stringify({
+        blocked: blocked
       })
     );
 
@@ -112,7 +156,6 @@ const server = http.createServer(async (req, res) => {
 
       } else {
 
-        // NORMAL USER
         companyProfit = amount * 0.60;
       }
 
