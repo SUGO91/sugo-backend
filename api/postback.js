@@ -1,8 +1,8 @@
+```javascript
 import http from "http";
 import admin from "firebase-admin";
-import axios from "axios";
 
-// FIREBASE INIT USING RENDER ENV VARIABLES
+// FIREBASE INIT
 admin.initializeApp({
   credential: admin.credential.cert({
     projectId: process.env.PROJECT_ID,
@@ -13,208 +13,137 @@ admin.initializeApp({
 
 const db = admin.firestore();
 
-// SERVER
 const server = http.createServer(async (req, res) => {
+  // HEALTH CHECK
   if (req.url === "/") {
     res.writeHead(200, { "Content-Type": "application/json" });
-
-    res.end(
-      JSON.stringify({
-        message: "Sugo backend running 🚀",
-      })
-    );
-
+    res.end(JSON.stringify({ message: "Sugo backend running 🚀" }));
     return;
   }
 
   // CPX POSTBACK
   if (req.url.startsWith("/postback")) {
-    const url = new URL(req.url, "http://localhost");
+    try {
+      const url = new URL(req.url, "http://localhost");
 
-    const userId = url.searchParams.get("user_id");
-    const status = url.searchParams.get("status");
-    const amount = Number(url.searchParams.get("amount"));
-    const transId = url.searchParams.get("trans_id");
+      const userId = url.searchParams.get("user_id");
+      const status = url.searchParams.get("status");
+      const amount = Number(url.searchParams.get("amount"));
+      const transId = url.searchParams.get("trans_id");
 
-    console.log("New CPX Event");
+      console.log("New CPX Survey Event");
 
-    // DUPLICATE CHECK
-    const transactionRef = db
-      .collection("processedTransactions")
-      .doc(transId);
+      // DUPLICATE BLOCK
+      const transactionRef = db.collection("processedTransactions").doc(transId);
+      const transactionSnap = await transactionRef.get();
 
-    const transactionSnap = await transactionRef.get();
+      if (transactionSnap.exists) {
+        console.log("Duplicate blocked ❌");
 
-    if (transactionSnap.exists) {
-      console.log("Duplicate transaction blocked ❌");
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ success: true }));
+        return;
+      }
+
+      if (status === "1") {
+        await transactionRef.set({
+          transactionId: transId,
+          createdAt: new Date(),
+        });
+
+        const userRef = db.collection("users").doc(userId);
+        const userSnap = await userRef.get();
+
+        if (!userSnap.exists) {
+          throw new Error("User not found");
+        }
+
+        const userData = userSnap.data();
+
+        let companyProfit = 0;
+        let userReward = amount * 0.40;
+        let referralReward = 0;
+
+        // REFERRAL CASE
+        if (userData.referredBy && userData.referredBy !== "") {
+          companyProfit = amount * 0.50;
+          referralReward = amount * 0.10;
+
+          const referrerQuery = await db
+            .collection("users")
+            .where("referralCode", "==", userData.referredBy)
+            .get();
+
+          if (!referrerQuery.empty) {
+            const referrerDoc = referrerQuery.docs[0];
+            const referrerData = referrerDoc.data();
+
+            await referrerDoc.ref.update({
+              referralEarnings:
+                (referrerData.referralEarnings || 0) + referralReward,
+
+              history: admin.firestore.FieldValue.arrayUnion(
+                `Referral reward +₹${referralReward.toFixed(2)}`
+              ),
+            });
+          }
+        } else {
+          // NORMAL USER
+          companyProfit = amount * 0.60;
+        }
+
+        // UPDATE USER
+        await userRef.update({
+          balance: (userData.balance || 0) + userReward,
+
+          totalEarningsRs:
+            (userData.totalEarningsRs || 0) + userReward,
+
+          history: admin.firestore.FieldValue.arrayUnion(
+            `Survey completed +₹${userReward.toFixed(2)}`
+          ),
+        });
+
+        // UPDATE COMPANY WALLET
+        const walletRef = db.collection("companyWallet").doc("main");
+        const walletSnap = await walletRef.get();
+
+        if (walletSnap.exists) {
+          const walletData = walletSnap.data();
+
+          await walletRef.update({
+            totalEarnings:
+              (walletData.totalEarnings || 0) + amount,
+
+            netProfit:
+              (walletData.netProfit || 0) + companyProfit,
+
+            totalPaidToUsers:
+              (walletData.totalPaidToUsers || 0) + userReward + referralReward,
+          });
+        }
+
+        console.log("Survey processed successfully ✅");
+      }
 
       res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ success: true }));
+      return;
+    } catch (error) {
+      console.log(error);
 
-      res.end(
-        JSON.stringify({
-          success: true,
-          message: "Duplicate ignored",
-        })
-      );
-
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Server error" }));
       return;
     }
-
-    if (status === "1") {
-      await transactionRef.set({
-        transactionId: transId,
-        createdAt: new Date(),
-      });
-
-      const userRef = db.collection("users").doc(userId);
-      const userSnap = await userRef.get();
-
-      if (!userSnap.exists) {
-        throw new Error("User not found");
-      }
-
-      const userData = userSnap.data();
-
-      let companyProfit = amount * 0.6;
-      let userReward = amount * 0.4;
-
-      // USER REWARD
-      const coins = Math.floor(userReward * 10);
-
-      // UPDATE USER
-      await userRef.update({
-        coins: (userData.coins || 0) + coins,
-
-        totalEarningsRs: (userData.totalEarningsRs || 0) + userReward,
-
-        pendingRewardValueRs:
-          (userData.pendingRewardValueRs || 0) + userReward,
-
-        history: admin.firestore.FieldValue.arrayUnion(
-          `Survey Completed +${coins} Coins`
-        ),
-
-        // TRACK SURVEY COUNT
-        referredSurveyCount: (userData.referredSurveyCount || 0) + 1,
-      });
-
-      // REFERRAL LOCK SYSTEM
-      if (
-        userData.referredBy &&
-        userData.referredBy !== "" &&
-        (userData.referredSurveyCount || 0) + 1 >= 3 &&
-        (userData.referralRewardCount || 0) === 0
-      ) {
-        const referrerQuery = await db
-          .collection("users")
-          .where("referralCode", "==", userData.referredBy)
-          .get();
-
-        if (!referrerQuery.empty) {
-          const referrerDoc = referrerQuery.docs[0];
-          const referrerData = referrerDoc.data();
-
-          const referralReward = 20; // fixed reward ₹20
-
-          await referrerDoc.ref.update({
-            referralEarnings:
-              (referrerData.referralEarnings || 0) + referralReward,
-
-            history: admin.firestore.FieldValue.arrayUnion(
-              `Referral Reward +₹${referralReward}`
-            ),
-          });
-
-          // MARK USER AS ALREADY REWARDED
-          await userRef.update({
-            referralRewardCount: 1,
-          });
-
-          console.log("Referral reward unlocked ✅");
-        }
-      }
-
-      // UPDATE WALLET
-      const walletRef = db.collection("companyWallet").doc("main");
-      const walletSnap = await walletRef.get();
-
-      if (walletSnap.exists) {
-        const walletData = walletSnap.data();
-
-        await walletRef.update({
-          totalEarnings: (walletData.totalEarnings || 0) + amount,
-
-          netProfit: (walletData.netProfit || 0) + companyProfit,
-
-          totalCoinsGiven: (walletData.totalCoinsGiven || 0) + coins,
-
-          estimatedRewardLiability:
-            (walletData.estimatedRewardLiability || 0) + userReward,
-        });
-      }
-
-      console.log("Survey processed successfully ✅");
-    }
-
-    res.writeHead(200, { "Content-Type": "application/json" });
-
-    res.end(
-      JSON.stringify({
-        success: true,
-        message: "Postback processed",
-      })
-    );
-
-    return;
   }
 
+  // 404
   res.writeHead(404, { "Content-Type": "application/json" });
-
-  res.end(
-    JSON.stringify({
-      error: "Route not found",
-    })
-  );
+  res.end(JSON.stringify({ error: "Route not found" }));
 });
 
 server.listen(10000, () => {
   console.log("Sugo backend running on port 10000 🚀");
 });
-// VPN DETECTION ROUTE
-
-app.post("/check-vpn", async (req, res) => {
-  try {
-    const ip = req.body.ip;
-
-    const response = await axios.get(
-      `https://ipapi.co/${ip}/json/`
-    );
-
-    const data = response.data;
-
-    // basic suspicious detection
-    if (
-      data.org &&
-      (
-        data.org.toLowerCase().includes("vpn") ||
-        data.org.toLowerCase().includes("proxy") ||
-        data.org.toLowerCase().includes("hosting") ||
-        data.org.toLowerCase().includes("datacenter")
-      )
-    ) {
-      return res.json({
-        blocked: true,
-        reason: "VPN or Proxy Detected"
-      });
-    }
-
-    return res.json({
-      blocked: false
-    });
-
-  } catch (error) {
-    return res.json({
-      blocked: false
-    });
-  }
-});
+```
