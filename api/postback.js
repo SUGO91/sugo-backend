@@ -12,7 +12,6 @@ admin.initializeApp({
 
 const db = admin.firestore();
 
-// BLOCKED NETWORK WORDS
 const blockedNetworks = [
   "vpn",
   "proxy",
@@ -23,36 +22,26 @@ const blockedNetworks = [
   "google",
   "oracle",
   "server",
-  "cloud"
+  "cloud",
 ];
 
-// SERVER
 const server = http.createServer(async (req, res) => {
-
-  // HOME ROUTE
+  // HOME
   if (req.url === "/") {
     res.writeHead(200, { "Content-Type": "application/json" });
-
-    res.end(
-      JSON.stringify({
-        message: "Sugo backend running 🚀",
-      })
-    );
-
+    res.end(JSON.stringify({ message: "Sugo backend running 🚀" }));
     return;
   }
 
-  // SECURITY CHECK ROUTE
+  // SECURITY CHECK
   if (req.url.startsWith("/security-check")) {
-
     const ip =
       req.headers["x-forwarded-for"] ||
       req.socket.remoteAddress ||
       "";
 
-    const lowerIp = String(ip).toLowerCase();
-
     let blocked = false;
+    const lowerIp = String(ip).toLowerCase();
 
     for (let word of blockedNetworks) {
       if (lowerIp.includes(word)) {
@@ -61,20 +50,25 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
-    res.writeHead(200, { "Content-Type": "application/json" });
+    // TRACK IP
+    const ipRef = db.collection("fraudIPs").doc(lowerIp);
+    const ipSnap = await ipRef.get();
 
-    res.end(
-      JSON.stringify({
-        blocked: blocked
-      })
-    );
+    if (!ipSnap.exists) {
+      await ipRef.set({
+        ip: lowerIp,
+        firstSeen: new Date(),
+      });
+    }
+
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ blocked }));
 
     return;
   }
 
   // CPX POSTBACK
   if (req.url.startsWith("/postback")) {
-
     const url = new URL(req.url, "http://localhost");
 
     const userId = url.searchParams.get("user_id");
@@ -84,7 +78,7 @@ const server = http.createServer(async (req, res) => {
 
     console.log("New CPX Event");
 
-    // DUPLICATE CHECK
+    // DUPLICATE BLOCK
     const transactionRef = db
       .collection("processedTransactions")
       .doc(transId);
@@ -92,8 +86,7 @@ const server = http.createServer(async (req, res) => {
     const transactionSnap = await transactionRef.get();
 
     if (transactionSnap.exists) {
-
-      console.log("Duplicate transaction blocked ❌");
+      console.log("Duplicate blocked ❌");
 
       res.writeHead(200, { "Content-Type": "application/json" });
 
@@ -108,7 +101,6 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (status === "1") {
-
       await transactionRef.set({
         transactionId: transId,
         createdAt: new Date(),
@@ -129,7 +121,6 @@ const server = http.createServer(async (req, res) => {
 
       // REFERRAL CASE
       if (userData.referredBy && userData.referredBy !== "") {
-
         companyProfit = amount * 0.50;
         referralReward = amount * 0.10;
 
@@ -139,31 +130,29 @@ const server = http.createServer(async (req, res) => {
           .get();
 
         if (!referrerQuery.empty) {
-
           const referrerDoc = referrerQuery.docs[0];
           const referrerData = referrerDoc.data();
 
           await referrerDoc.ref.update({
-
             referralEarnings:
               (referrerData.referralEarnings || 0) + referralReward,
+
+            balance:
+              (referrerData.balance || 0) + referralReward,
 
             history: admin.firestore.FieldValue.arrayUnion(
               `Referral reward +₹${referralReward}`
             ),
           });
         }
-
       } else {
-
+        // NORMAL USER
         companyProfit = amount * 0.60;
       }
 
       // UPDATE USER
       await userRef.update({
-
-        balance:
-          (userData.balance || 0) + userReward,
+        balance: (userData.balance || 0) + userReward,
 
         totalEarningsRs:
           (userData.totalEarningsRs || 0) + userReward,
@@ -173,16 +162,14 @@ const server = http.createServer(async (req, res) => {
         ),
       });
 
-      // UPDATE COMPANY WALLET
+      // COMPANY WALLET
       const walletRef = db.collection("companyWallet").doc("main");
       const walletSnap = await walletRef.get();
 
       if (walletSnap.exists) {
-
         const walletData = walletSnap.data();
 
         await walletRef.update({
-
           totalEarnings:
             (walletData.totalEarnings || 0) + amount,
 
@@ -190,9 +177,9 @@ const server = http.createServer(async (req, res) => {
             (walletData.netProfit || 0) + companyProfit,
 
           totalPaidToUsers:
-            (walletData.totalPaidToUsers || 0)
-            + userReward
-            + referralReward,
+            (walletData.totalPaidToUsers || 0) +
+            userReward +
+            referralReward,
         });
       }
 
