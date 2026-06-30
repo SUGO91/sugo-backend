@@ -26,6 +26,7 @@ const blockedNetworks = [
 ];
 
 const server = http.createServer(async (req, res) => {
+
   // HOME
   if (req.url === "/") {
     res.writeHead(200, { "Content-Type": "application/json" });
@@ -35,6 +36,7 @@ const server = http.createServer(async (req, res) => {
 
   // SECURITY CHECK
   if (req.url.startsWith("/security-check")) {
+
     const ip =
       req.headers["x-forwarded-for"] ||
       req.socket.remoteAddress ||
@@ -46,7 +48,6 @@ const server = http.createServer(async (req, res) => {
     for (let word of blockedNetworks) {
       if (lowerIp.includes(word)) {
         blocked = true;
-        break;
       }
     }
 
@@ -58,6 +59,8 @@ const server = http.createServer(async (req, res) => {
       await ipRef.set({
         ip: lowerIp,
         firstSeen: new Date(),
+        signupCount: 0,
+        suspicious: false
       });
     }
 
@@ -67,8 +70,44 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // IP ACCOUNT TRACKING
+  if (req.url.startsWith("/register-ip")) {
+
+    const ip =
+      req.headers["x-forwarded-for"] ||
+      req.socket.remoteAddress ||
+      "";
+
+    const lowerIp = String(ip).toLowerCase();
+
+    const ipRef = db.collection("fraudIPs").doc(lowerIp);
+    const ipSnap = await ipRef.get();
+
+    if (ipSnap.exists) {
+
+      const data = ipSnap.data();
+      const count = (data.signupCount || 0) + 1;
+
+      await ipRef.update({
+        signupCount: count
+      });
+
+      if (count > 3) {
+        await ipRef.update({
+          suspicious: true
+        });
+      }
+    }
+
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ success: true }));
+
+    return;
+  }
+
   // CPX POSTBACK
   if (req.url.startsWith("/postback")) {
+
     const url = new URL(req.url, "http://localhost");
 
     const userId = url.searchParams.get("user_id");
@@ -76,9 +115,6 @@ const server = http.createServer(async (req, res) => {
     const amount = Number(url.searchParams.get("amount"));
     const transId = url.searchParams.get("trans_id");
 
-    console.log("New CPX Event");
-
-    // DUPLICATE BLOCK
     const transactionRef = db
       .collection("processedTransactions")
       .doc(transId);
@@ -86,21 +122,19 @@ const server = http.createServer(async (req, res) => {
     const transactionSnap = await transactionRef.get();
 
     if (transactionSnap.exists) {
-      console.log("Duplicate blocked ❌");
 
       res.writeHead(200, { "Content-Type": "application/json" });
 
-      res.end(
-        JSON.stringify({
-          success: true,
-          message: "Duplicate ignored",
-        })
-      );
+      res.end(JSON.stringify({
+        success: true,
+        message: "Duplicate ignored"
+      }));
 
       return;
     }
 
     if (status === "1") {
+
       await transactionRef.set({
         transactionId: transId,
         createdAt: new Date(),
@@ -119,8 +153,9 @@ const server = http.createServer(async (req, res) => {
       let userReward = amount * 0.40;
       let referralReward = 0;
 
-      // REFERRAL CASE
+      // REFERRAL
       if (userData.referredBy && userData.referredBy !== "") {
+
         companyProfit = amount * 0.50;
         referralReward = amount * 0.10;
 
@@ -130,10 +165,12 @@ const server = http.createServer(async (req, res) => {
           .get();
 
         if (!referrerQuery.empty) {
+
           const referrerDoc = referrerQuery.docs[0];
           const referrerData = referrerDoc.data();
 
           await referrerDoc.ref.update({
+
             referralEarnings:
               (referrerData.referralEarnings || 0) + referralReward,
 
@@ -142,24 +179,27 @@ const server = http.createServer(async (req, res) => {
 
             history: admin.firestore.FieldValue.arrayUnion(
               `Referral reward +₹${referralReward}`
-            ),
+            )
           });
         }
+
       } else {
-        // NORMAL USER
+
         companyProfit = amount * 0.60;
       }
 
       // UPDATE USER
       await userRef.update({
-        balance: (userData.balance || 0) + userReward,
+
+        balance:
+          (userData.balance || 0) + userReward,
 
         totalEarningsRs:
           (userData.totalEarningsRs || 0) + userReward,
 
         history: admin.firestore.FieldValue.arrayUnion(
           `Survey completed +₹${userReward}`
-        ),
+        )
       });
 
       // COMPANY WALLET
@@ -167,9 +207,11 @@ const server = http.createServer(async (req, res) => {
       const walletSnap = await walletRef.get();
 
       if (walletSnap.exists) {
+
         const walletData = walletSnap.data();
 
         await walletRef.update({
+
           totalEarnings:
             (walletData.totalEarnings || 0) + amount,
 
@@ -177,23 +219,19 @@ const server = http.createServer(async (req, res) => {
             (walletData.netProfit || 0) + companyProfit,
 
           totalPaidToUsers:
-            (walletData.totalPaidToUsers || 0) +
-            userReward +
-            referralReward,
+            (walletData.totalPaidToUsers || 0)
+            + userReward
+            + referralReward
         });
       }
-
-      console.log("Survey processed successfully ✅");
     }
 
     res.writeHead(200, { "Content-Type": "application/json" });
 
-    res.end(
-      JSON.stringify({
-        success: true,
-        message: "Postback processed",
-      })
-    );
+    res.end(JSON.stringify({
+      success: true,
+      message: "Postback processed"
+    }));
 
     return;
   }
@@ -201,11 +239,9 @@ const server = http.createServer(async (req, res) => {
   // 404
   res.writeHead(404, { "Content-Type": "application/json" });
 
-  res.end(
-    JSON.stringify({
-      error: "Route not found",
-    })
-  );
+  res.end(JSON.stringify({
+    error: "Route not found"
+  }));
 });
 
 server.listen(10000, () => {
